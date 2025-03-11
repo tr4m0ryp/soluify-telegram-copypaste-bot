@@ -12,7 +12,7 @@ This project is a **Telegram bot** that can forward messages from one or more so
 
 ## 2. Installation
 
-1. **Clone or download** this repository (make sure you have the main script, e.g. `SoluifyCopierBot.py`).  
+1. **Clone or download** this repository (make sure you have the main script, e.g. `MainBot.py`).  
 2. Install required Python dependencies:
    ```bash
    pip install -r requirements.txt
