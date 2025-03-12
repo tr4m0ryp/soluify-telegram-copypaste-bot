@@ -1,7 +1,6 @@
-
 #!/usr/bin/env python3
 # ==============================================================================
-# Soluify  |  Your #1 IT Problem Solver  |  {telegram-copypaste-bot v3.2}
+# Soluify  |  Your #1 IT Problem Solver  |  {telegram-copypaste-bot v3.3}
 # ==============================================================================
 #  __         _
 # (_  _ |   .(_
@@ -13,9 +12,10 @@
 # from source channels/groups (which the bot cannot access) and then uses a bot
 # account to forward the messages to destination chats.
 #
-# Additionally, it cleans the forwarded messages by removing any content starting
-# with the unwanted footer "📹 YouTube". It also uses a background thread for
-# exit command detection, which works reliably on Windows.
+# Additionally, it cleans the forwarded messages by removing any signature content
+# matching a specific pattern containing YouTube, Telegram, Twitter, and DAPP links.
+# It also uses a background thread for exit command detection, which works reliably
+# on Windows.
 # ==============================================================================
 import asyncio
 import random
@@ -205,7 +205,7 @@ def exit_listener(forwarder):
 # ------------------------------------------------------------------------------
 # Class for message forwarding using two clients:
 # reader_client (user account) to fetch messages, sender_client (bot) to send messages.
-# Now with text cleaning to remove unwanted footers.
+# Now with improved text cleaning to remove complex signatures.
 # ------------------------------------------------------------------------------
 class TelegramForwarder:
     def __init__(self, reader_client, sender_client):
@@ -213,6 +213,17 @@ class TelegramForwarder:
         self.sender = sender_client
         self.running = False
         self.blacklist = []
+        
+        # Define regex patterns to match unwanted signature content.
+        self.signature_patterns = [
+            r'📹\s*YouTube\s*\(https?://(?:www\.)?youtube\.com/[^\)]+\)\s*\|\s*✅\s*Telegram\s*\(http://t\.me/[^\)]+\)(?:\s*\([^\)]+\))?\s*🕊\s*Twitter\s*\([^\)]+\)\s*\|\s*🌐\s*DAPP\s*\([^\)]+\)',
+            r'📹\s*YouTube.*?(?=\n\n|$)',
+            r'✅\s*Telegram.*?(?=\n\n|$)',
+            r'🕊\s*Twitter.*?(?=\n\n|$)',
+            r'🌐\s*DAPP.*?(?=\n\n|$)'
+        ]
+        # Compile each pattern as a regex (case-insensitive, dot matches newlines)
+        self.signature_regex = [re.compile(pattern, re.DOTALL | re.IGNORECASE) for pattern in self.signature_patterns]
 
     async def ensure_connections(self):
         for client in (self.reader, self.sender):
@@ -244,11 +255,26 @@ class TelegramForwarder:
                 pbar.update(1)
         print(gradient_text("Chat list written to file!", SUCCESS_COLOR, SUCCESS_COLOR, "🎉"))
 
+    def clean_message_text(self, text):
+        """
+        Removes unwanted signature content from message text based on predefined regex patterns.
+        """
+        if not text:
+            return ""
+        clean_text = text
+        for regex in self.signature_regex:
+            clean_text = regex.sub('', clean_text)
+        # Remove any trailing whitespace or excessive newlines.
+        clean_text = clean_text.strip()
+        if clean_text != text:
+            logger.info("Unwanted signature removed from message")
+        return clean_text
+
     async def forward_messages_to_channels(self, source_chat_ids, destination_channel_ids, keywords, signature):
         """
         Forwards messages from source chats (fetched by the user account)
-        to destination chats (sent by the bot). Unwanted footer text starting with
-        "📹 YouTube" is removed before sending.
+        to destination chats (sent by the bot). Unwanted signature patterns are removed
+        before sending. If a custom signature is provided (non-empty), it is appended.
         """
         if not await self.ensure_connections():
             return
@@ -279,21 +305,23 @@ class TelegramForwarder:
                             should_forward = False
                         if should_forward:
                             if message.text:
-                                clean_text = message.text
-                                if "📹 YouTube" in clean_text:
-                                    clean_text = clean_text.split("📹 YouTube")[0].strip()
-                                if clean_text:
-                                    for dest_id in destination_channel_ids:
-                                        await self.sender.send_message(dest_id, clean_text + f"\n\n**{signature}**")
+                                clean_text = self.clean_message_text(message.text)
+                                final_text = clean_text
+                                if signature:  # Optionally append a custom signature if provided
+                                    final_text += f"\n\n**{signature}**"
+                                for dest_id in destination_channel_ids:
+                                    await self.sender.send_message(dest_id, final_text)
                             if message.media:
                                 media_path = await self.reader.download_media(message.media)
+                                caption_text = ""
                                 if message.text:
-                                    clean_text = message.text
-                                    if "📹 YouTube" in clean_text:
-                                        clean_text = clean_text.split("📹 YouTube")[0].strip()
-                                    caption_text = f"{clean_text}\n\n**{signature}**" if clean_text else f"**{signature}**"
+                                    clean_text = self.clean_message_text(message.text)
+                                    caption_text = clean_text
+                                    if signature:
+                                        caption_text += f"\n\n**{signature}**"
                                 else:
-                                    caption_text = f"**{signature}**"
+                                    if signature:
+                                        caption_text = f"**{signature}**"
                                 for dest_id in destination_channel_ids:
                                     await self.sender.send_file(dest_id, media_path, caption=caption_text)
                             print(gradient_text(f"[{timestamp}] Message forwarded!", SUCCESS_COLOR, SUCCESS_COLOR, "✅"))
@@ -339,7 +367,7 @@ def edit_profile(profile_name):
     config['destination_channel_ids'] = [int(chat_id.strip()) for chat_id in config['destination_channel_ids']]
     config['keywords'] = input(gradient_text("Keywords for filtering (optional, comma separated): ", PROMPT_COLOR_START, PROMPT_COLOR_END)).split(',')
     config['keywords'] = [kw.strip() for kw in config['keywords'] if kw.strip()]
-    config['signature'] = input(gradient_text("Signature to append under each message: ", PROMPT_COLOR_START, PROMPT_COLOR_END))
+    config['signature'] = input(gradient_text("Signature to append under each message (leave empty to append nothing): ", PROMPT_COLOR_START, PROMPT_COLOR_END))
     config['blacklist'] = input(gradient_text("Blacklisted words (comma separated, or leave empty): ", PROMPT_COLOR_START, PROMPT_COLOR_END)).split(',')
     config['blacklist'] = [w.strip().lower() for w in config['blacklist'] if w.strip()]
     profiles[profile_name] = config
@@ -383,8 +411,9 @@ async def display_help():
     2. Message Forwarding:
        - Forwards messages from source chats (read by the USER account)
          to destination chats (sent by the BOT account).
-       - Unwanted footer text (starting with "📹 YouTube") is removed.
-       - Optionally filter by keywords, append a signature, or skip blacklisted words.
+       - Unwanted signature patterns (e.g. YouTube, Telegram, Twitter, DAPP links)
+         are automatically removed.
+       - Optionally, a custom signature can be appended.
     
     3. Edit Profile:
        - Modify existing configuration profiles.
@@ -446,7 +475,7 @@ def get_new_config():
     destination_channel_ids = [int(chat_id.strip()) for chat_id in destination_channel_ids]
     keywords = input(gradient_text("Keywords for filtering (leave empty for all): ", PROMPT_COLOR_START, PROMPT_COLOR_END)).split(',')
     keywords = [kw.strip() for kw in keywords if kw.strip()]
-    signature = input(gradient_text("Signature to append under each message: ", PROMPT_COLOR_START, PROMPT_COLOR_END))
+    signature = input(gradient_text("Signature to append under each message (leave empty for none): ", PROMPT_COLOR_START, PROMPT_COLOR_END))
     blacklist = input(gradient_text("Blacklisted words (comma separated, or empty): ", PROMPT_COLOR_START, PROMPT_COLOR_END)).split(',')
     blacklist = [w.strip().lower() for w in blacklist if w.strip()]
     save_choice = input(gradient_text("Save this config as a profile? (y/n): ", PROMPT_COLOR_START, PROMPT_COLOR_END))
